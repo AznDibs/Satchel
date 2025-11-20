@@ -743,7 +743,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	DamageFrame.Position = UDim2.new(0, 0, 1, 0)
 	DamageFrame.BackgroundColor3 = DAMAGE_BACKGROUND_COLOR
 	DamageFrame.BackgroundTransparency = 0
-	newGui.BorderColor3 = Color3.new(0, 0, 0)
+	DamageFrame.BorderColor3 = Color3.new(0, 0, 0)
 	DamageFrame.Visible = false
 	DamageFrame.Parent = ToolIcon
 
