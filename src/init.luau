@@ -994,6 +994,13 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	return slot
 end
 
+local signs = {
+	Riot = true,
+	Praise = true,
+	Help = true,
+	Panic = true,
+}
+
 local function OnChildAdded(child: Instance): () -- To Character or Backpack
 	if not child:IsA("Tool") and not child:IsA("HopperBin") then --NOTE: HopperBin
 		if child:IsA("Humanoid") and child.Parent == Character then
@@ -1055,6 +1062,9 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 				UnequipAllTools()
 				ActiveHopper = tool
 			end
+		end
+		if signs[tool.Name] then
+			slot:MoveToInventory()
 		end
 	end
 
@@ -1360,8 +1370,13 @@ changeToolFunc = function(actionName: string, inputState: Enum.UserInputState, i
 		end
 
 		if lastEquippedSlot and lastEquippedSlot.Tool then
-			lastEquippedSlot:Select()
-			return
+			-- Only return to the last equipped slot if it's part of the hotbar.
+			-- If the last equipped slot is in the inventory, fall through to
+			-- selecting the next available hotbar slot instead.
+			if lastEquippedSlot.Index <= NumberOfHotbarSlots then
+				lastEquippedSlot:Select()
+				return
+			end
 		end
 
 		local startIndex: number = moveDirection == -1 and NumberOfHotbarSlots or 1

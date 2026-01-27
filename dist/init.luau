@@ -994,6 +994,13 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	return slot
 end
 
+local signs = {
+	Riot = true,
+	Praise = true,
+	Help = true,
+	Panic = true,
+}
+
 local function OnChildAdded(child: Instance): () -- To Character or Backpack
 	if not child:IsA("Tool") and not child:IsA("HopperBin") then --NOTE: HopperBin
 		if child:IsA("Humanoid") and child.Parent == Character then
@@ -1055,6 +1062,9 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 				UnequipAllTools()
 				ActiveHopper = tool
 			end
+		end
+		if signs[tool.Name] then
+			slot:MoveToInventory()
 		end
 	end
 
