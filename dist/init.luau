@@ -14,6 +14,7 @@ local StarterGui = game:GetService("StarterGui")
 local TextChatService = game:GetService("TextChatService")
 local UserInputService = game:GetService("UserInputService")
 local VRService = game:GetService("VRService")
+local SatchelViewportPreview = require(game.StarterPlayer.StarterPlayerScripts.Modules.SatchelViewportPreview)
 local PlayerGui: Instance = Players.LocalPlayer:WaitForChild("PlayerGui")
 
 local BackpackScript = {}
@@ -389,8 +390,8 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	local DamageFrame: Frame = nil
 	local CurrentUsesAttrChangeConn = nil
 
-	--NOTE: The following are only defined for Hotbar Slots
 	local ToolTip: TextLabel = nil
+	--NOTE: The following is only defined for Hotbar Slots
 	local SlotNumber: TextLabel = nil
 
 	-- Slot Functions --
@@ -452,7 +453,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 
 			-- If there is a tooltip, then show it
 			if ToolTip and tool:IsA("Tool") then --NOTE: HopperBin
-				ToolTip.Text = tool.ToolTip
+				ToolTip.Text = if tool.ToolTip ~= "" then tool.ToolTip else tool.Name
 				ToolTip.Size = UDim2.fromOffset(0, TOOLTIP_HEIGHT)
 				ToolTip.Position = UDim2.new(0.5, 0, 0, TOOLTIP_OFFSET)
 			end
@@ -460,6 +461,25 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			updateDamage()
 		end
 		assignToolData()
+
+		-- ── Viewport preview (replaces flat icon when possible) ──────────
+		-- Defer viewport creation for inventory slots when panel is closed
+		local isInventorySlot = self.Index > NumberOfHotbarSlots
+		local invVisible = InventoryFrame and InventoryFrame.Visible
+		if isInventorySlot and not invVisible then
+			SlotFrame:SetAttribute("_ViewportDeferred", true)
+			ToolIcon.Visible = true
+		else
+			SlotFrame:SetAttribute("_ViewportDeferred", false)
+			local viewportRendered = SatchelViewportPreview.renderSlot(SlotFrame, tool)
+			if viewportRendered then
+				ToolIcon.Visible = false
+				ToolName.Visible = false
+			else
+				ToolIcon.Visible = true
+				ToolName.Visible = (tool.TextureId == "")
+			end
+		end
 
 		-- Disconnect tool event if it exists
 		if ToolChangeConn then
@@ -471,6 +491,18 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		ToolChangeConn = tool.Changed:Connect(function(property: string): ()
 			if property == "TextureId" or property == "Name" or property == "ToolTip" then
 				assignToolData()
+				-- Refresh viewport preview (skip if deferred)
+				if SlotFrame:GetAttribute("_ViewportDeferred") then
+					return
+				end
+				local vpRendered = SatchelViewportPreview.renderSlot(SlotFrame, tool)
+				if vpRendered then
+					ToolIcon.Visible = false
+					ToolName.Visible = false
+				else
+					ToolIcon.Visible = true
+					ToolName.Visible = (tool.TextureId == "")
+				end
 			end
 		end)
 
@@ -524,6 +556,9 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			ToolChangeConn = nil
 		end
 
+		SatchelViewportPreview.clearSlot(SlotFrame)
+		ToolIcon.Visible = true
+		ToolName.Visible = true
 		ToolIcon.Image = ""
 		ToolName.Text = ""
 		if ToolTip then
@@ -654,6 +689,20 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 				UnequipAllTools()
 			elseif tool.Parent == Backpack then
 				EquipNewTool(tool)
+
+				-- Auto-swap inventory tool into last hotbar slot
+				if slot.Index > NumberOfHotbarSlots then
+					local lastHotbarSlot = Slots[NumberOfHotbarSlots]
+					if not lastHotbarSlot.Tool then
+						self:Clear()
+						lastHotbarSlot:Fill(tool)
+						self:Delete()
+						UpdateScrollingFrameCanvasSize()
+					else
+						self:Swap(lastHotbarSlot)
+					end
+					AdjustHotbarFrames()
+				end
 			end
 		end
 	end
@@ -758,48 +807,52 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 
 	slot.Frame.LayoutOrder = slot.Index
 
-	if index <= NumberOfHotbarSlots then -- Hotbar-Specific Slot Stuff
-		-- ToolTip stuff
-		ToolTip = Instance.new("TextLabel")
-		ToolTip.Name = "ToolTip"
-		ToolTip.Text = ""
-		ToolTip.Size = UDim2.fromScale(1, 1)
-		ToolTip.TextColor3 = TEXT_COLOR
-		ToolTip.TextStrokeTransparency = TEXT_STROKE_TRANSPARENCY
-		ToolTip.TextStrokeColor3 = TEXT_STROKE_COLOR
-		ToolTip.FontFace = Font.new(FONT_FAMILY.Family, Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-		ToolTip.TextSize = FONT_SIZE
-		ToolTip.ZIndex = 2
-		ToolTip.TextWrapped = false
-		ToolTip.TextYAlignment = Enum.TextYAlignment.Center
-		ToolTip.BackgroundColor3 = TOOLTIP_BACKGROUND_COLOR
-		ToolTip.BackgroundTransparency = SLOT_LOCKED_TRANSPARENCY
-		ToolTip.AnchorPoint = Vector2.new(0.5, 1)
-		ToolTip.BorderSizePixel = 0
-		ToolTip.Visible = false
-		ToolTip.AutomaticSize = Enum.AutomaticSize.X
-		ToolTip.Parent = SlotFrame
+	-- ToolTip (shown for all slots — hotbar and inventory)
+	ToolTip = Instance.new("TextLabel")
+	ToolTip.Name = "ToolTip"
+	ToolTip.Text = ""
+	ToolTip.Size = UDim2.fromScale(1, 1)
+	ToolTip.TextColor3 = TEXT_COLOR
+	ToolTip.TextStrokeTransparency = TEXT_STROKE_TRANSPARENCY
+	ToolTip.TextStrokeColor3 = TEXT_STROKE_COLOR
+	ToolTip.FontFace = Font.new(FONT_FAMILY.Family, Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+	ToolTip.TextSize = FONT_SIZE
+	ToolTip.ZIndex = 2
+	ToolTip.TextWrapped = false
+	ToolTip.TextYAlignment = Enum.TextYAlignment.Center
+	ToolTip.BackgroundColor3 = TOOLTIP_BACKGROUND_COLOR
+	ToolTip.BackgroundTransparency = SLOT_LOCKED_TRANSPARENCY
+	ToolTip.AnchorPoint = Vector2.new(0.5, 1)
+	ToolTip.BorderSizePixel = 0
+	ToolTip.Visible = false
+	ToolTip.AutomaticSize = Enum.AutomaticSize.X
+	ToolTip.Parent = SlotFrame
 
-		local ToolTipCorner: UICorner = Instance.new("UICorner")
-		ToolTipCorner.Name = "Corner"
-		ToolTipCorner.CornerRadius = TOOLTIP_CORNER_RADIUS
-		ToolTipCorner.Parent = ToolTip
+	local ToolTipCorner: UICorner = Instance.new("UICorner")
+	ToolTipCorner.Name = "Corner"
+	ToolTipCorner.CornerRadius = TOOLTIP_CORNER_RADIUS
+	ToolTipCorner.Parent = ToolTip
 
-		local ToolTipPadding: UIPadding = Instance.new("UIPadding")
-		ToolTipPadding.PaddingLeft = UDim.new(0, TOOLTIP_PADDING)
-		ToolTipPadding.PaddingRight = UDim.new(0, TOOLTIP_PADDING)
-		ToolTipPadding.PaddingTop = UDim.new(0, TOOLTIP_PADDING)
-		ToolTipPadding.PaddingBottom = UDim.new(0, TOOLTIP_PADDING)
-		ToolTipPadding.Parent = ToolTip
-		SlotFrame.MouseEnter:Connect(function(): ()
+	local ToolTipPadding: UIPadding = Instance.new("UIPadding")
+	ToolTipPadding.PaddingLeft = UDim.new(0, TOOLTIP_PADDING)
+	ToolTipPadding.PaddingRight = UDim.new(0, TOOLTIP_PADDING)
+	ToolTipPadding.PaddingTop = UDim.new(0, TOOLTIP_PADDING)
+	ToolTipPadding.PaddingBottom = UDim.new(0, TOOLTIP_PADDING)
+	ToolTipPadding.Parent = ToolTip
+	SlotFrame.InputBegan:Connect(function(input: InputObject): ()
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
 			if ToolTip.Text ~= "" then
 				ToolTip.Visible = true
 			end
-		end)
-		SlotFrame.MouseLeave:Connect(function(): ()
+		end
+	end)
+	SlotFrame.InputEnded:Connect(function(input: InputObject): ()
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
 			ToolTip.Visible = false
-		end)
+		end
+	end)
 
+	if index <= NumberOfHotbarSlots then -- Hotbar-Specific Slot Stuff
 		function slot:MoveToInventory(): ...any
 			if slot.Index <= NumberOfHotbarSlots then -- From a Hotbar slot
 				local tool: any = slot.Tool
@@ -1051,6 +1104,19 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 	local slot: any = SlotsByTool[tool]
 	if slot then
 		slot:UpdateEquipView()
+		-- Auto-swap sign from inventory to last hotbar slot when equipped via chat
+		if signs[tool.Name] and tool.Parent == Character and slot.Index > NumberOfHotbarSlots then
+			local lastHotbarSlot = Slots[NumberOfHotbarSlots]
+			if not lastHotbarSlot.Tool then
+				slot:Clear()
+				lastHotbarSlot:Fill(tool)
+				slot:Delete()
+				UpdateScrollingFrameCanvasSize()
+			else
+				slot:Swap(lastHotbarSlot)
+			end
+			AdjustHotbarFrames()
+		end
 	else -- New! Put into lowest hotbar slot or new inventory slot
 		slot = LowestEmptySlot or MakeSlot(UIGridFrame)
 		slot:Fill(tool)
@@ -1063,7 +1129,7 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 				ActiveHopper = tool
 			end
 		end
-		if signs[tool.Name] then
+		if signs[tool.Name] and slot.Index <= NumberOfHotbarSlots then
 			slot:MoveToInventory()
 		end
 	end
@@ -2137,6 +2203,49 @@ do -- Make the Inventory expand/collapse arrow (unless TopBar)
 
 		BackpackScript.IsOpen = InventoryFrame.Visible
 		BackpackScript.StateChanged:Fire(InventoryFrame.Visible)
+
+		-- Batch-render or clean up deferred inventory viewports
+		if InventoryFrame.Visible then
+			-- Inventory opened: render any deferred slots
+			for i = NumberOfHotbarSlots + 1, #Slots do
+				local s = Slots[i]
+				if s and s.Tool and s.Frame:GetAttribute("_ViewportDeferred") then
+					s.Frame:SetAttribute("_ViewportDeferred", false)
+					local vpRendered = SatchelViewportPreview.renderSlot(s.Frame, s.Tool)
+					local icon = s.Frame:FindFirstChild("Icon")
+					if icon then
+						icon.Visible = not vpRendered
+					end
+					local toolNameLabel = s.Frame:FindFirstChild("ToolName")
+					if toolNameLabel then
+						if vpRendered then
+							toolNameLabel.Visible = false
+						else
+							toolNameLabel.Visible = (s.Tool.TextureId == "")
+						end
+					end
+				end
+			end
+		else
+			-- Inventory closed: clean up inventory slot viewports to save GPU
+			for i = NumberOfHotbarSlots + 1, #Slots do
+				local s = Slots[i]
+				if s and s.Frame then
+					SatchelViewportPreview.clearSlot(s.Frame)
+					local icon = s.Frame:FindFirstChild("Icon")
+					if icon then
+						icon.Visible = true
+					end
+					local toolNameLabel = s.Frame:FindFirstChild("ToolName")
+					if toolNameLabel then
+						toolNameLabel.Visible = true
+					end
+					if s.Tool then
+						s.Frame:SetAttribute("_ViewportDeferred", true)
+					end
+				end
+			end
+		end
 	end
 
 	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, false)
