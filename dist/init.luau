@@ -839,17 +839,16 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	ToolTipPadding.PaddingTop = UDim.new(0, TOOLTIP_PADDING)
 	ToolTipPadding.PaddingBottom = UDim.new(0, TOOLTIP_PADDING)
 	ToolTipPadding.Parent = ToolTip
-	SlotFrame.InputBegan:Connect(function(input: InputObject): ()
-		if input.UserInputType == Enum.UserInputType.MouseMovement then
-			if ToolTip.Text ~= "" then
-				ToolTip.Visible = true
-			end
+	-- Use MouseEnter/MouseLeave instead of InputBegan/InputEnded with MouseMovement
+	-- because ScrollingFrame consumes MouseMovement InputBegan from children,
+	-- preventing tooltips from showing on hover for inventory slots.
+	SlotFrame.MouseEnter:Connect(function()
+		if ToolTip.Text ~= "" then
+			ToolTip.Visible = true
 		end
 	end)
-	SlotFrame.InputEnded:Connect(function(input: InputObject): ()
-		if input.UserInputType == Enum.UserInputType.MouseMovement then
-			ToolTip.Visible = false
-		end
+	SlotFrame.MouseLeave:Connect(function()
+		ToolTip.Visible = false
 	end)
 
 	if index <= NumberOfHotbarSlots then -- Hotbar-Specific Slot Stuff
@@ -909,6 +908,10 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			if SlotNumber then
 				SlotNumber.ZIndex = 2
 			end
+			local vpContainer = SlotFrame:FindFirstChild("ViewportContainer")
+			if vpContainer then
+				vpContainer.ZIndex = 2
+			end
 			-- if HighlightFrame then
 			-- 	HighlightFrame.ZIndex = 2
 			-- 	for _, child in pairs(HighlightFrame:GetChildren()) do
@@ -958,6 +961,10 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 
 			if SlotNumber then
 				SlotNumber.ZIndex = 1
+			end
+			local vpContainer = SlotFrame:FindFirstChild("ViewportContainer")
+			if vpContainer then
+				vpContainer.ZIndex = 0
 			end
 			-- if HighlightFrame then
 			-- 	HighlightFrame.ZIndex = 1
