@@ -555,6 +555,11 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			ToolChangeConn:Disconnect()
 			ToolChangeConn = nil
 		end
+		-- Stop following the old tool's wear, or using it elsewhere redraws this empty slot's bar
+		if CurrentUsesAttrChangeConn then
+			CurrentUsesAttrChangeConn:Disconnect()
+			CurrentUsesAttrChangeConn = nil
+		end
 
 		SatchelViewportPreview.clearSlot(SlotFrame)
 		ToolIcon.Visible = true
@@ -665,7 +670,9 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	function slot:CheckTerms(terms: any): number
 		local hits: number = 0
 		local function checkEm(str: string, term: any): ()
-			local _, n: number = str:lower():gsub(term, "")
+			-- Escape punctuation so typed text matches literally; a raw "[" or "(" is a malformed pattern and errors
+			local literalTerm: string = term:gsub("%p", "%%%0")
+			local _, n: number = str:lower():gsub(literalTerm, "")
 			hits = hits + n
 		end
 		local tool: Tool = self.Tool
@@ -783,6 +790,18 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	ToolName.TextTruncate = Enum.TextTruncate.AtEnd
 	ToolName.Parent = SlotFrame
 
+	-- Holds the damage bar in the icon's footprint. It lives on the slot, not the icon, because the
+	-- icon is hidden while a 3D viewport preview replaces it, which used to hide the wear bar too.
+	local DamageHolder: Frame = Instance.new("Frame")
+	DamageHolder.Name = "DamageHolder"
+	DamageHolder.BackgroundTransparency = 1
+	DamageHolder.Interactable = false
+	DamageHolder.ZIndex = 0
+	DamageHolder.Size = ToolIcon.Size
+	DamageHolder.Position = ToolIcon.Position
+	DamageHolder.AnchorPoint = ToolIcon.AnchorPoint
+	DamageHolder.Parent = SlotFrame
+
 	-- Damage Frame init
 	DamageFrame = Instance.new("Frame")
 	DamageFrame.Name = "Damage"
@@ -794,7 +813,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	DamageFrame.BackgroundTransparency = 0
 	DamageFrame.BorderColor3 = Color3.new(0, 0, 0)
 	DamageFrame.Visible = false
-	DamageFrame.Parent = ToolIcon
+	DamageFrame.Parent = DamageHolder
 
 	local DamageCorner = Instance.new("UICorner")
 	DamageCorner.Name = "Corner"
