@@ -217,16 +217,21 @@ local GROUP_BY_NAME: { [string]: string } = {
 	Help = "Signs",
 	Panic = "Signs",
 }
--- Order of a group's members on its 2x2 icon (unlisted members go last, by name)
+-- Order of a group's members on its icon and wheel (unlisted members go last, by name)
 local GROUP_ORDER: { [string]: { string } } = {
 	Signs = { "Riot", "Praise", "Help", "Panic" },
 }
--- Tool attribute: comma-separated image ids drawn as the slot's 2x2 icon, for one tool that holds
--- several items (the instrument case)
+-- Tool attribute: comma-separated image ids of everything one tool holds (the instrument case);
+-- its slot shows the held one (TextureId) big and some of the rest small, like a group
 local GROUP_ICONS_ATTRIBUTE = "SatchelGroupIcons"
--- Cells in the 2x2 icon
-local GROUP_ICON_CELLS = 4
+-- A group slot shows the item in hand big and up to this many of the others small (owner
+-- 2026-10-11: "show the current one being used, and the other 3 in smaller size")
+local GROUP_ICON_OTHERS = 3
+-- Where the small icons go: "Strip" (a row under the big one) or "Column" (down the right side).
+-- Read at draw time from this ModuleScript's `GroupIconLayout` attribute, so both can be compared live
+local GROUP_ICON_LAYOUT_DEFAULT = "Strip"
 local GroupMembers: { [string]: { Tool } } = {} -- Group name -> its tools in the Backpack or Character
+local GroupHints: { [string]: string } = {} -- Group name -> key cap text on its slot (`SetGroupHint`)
 local HotkeyFns = {} -- Map of KeyCode values to their assigned behaviors
 local Dragging: { boolean } = {} -- Only used to check if anything is being dragged, to disable other input
 local FullHotbarSlots: number = 0 -- Now being used to also determine whether or not LB and RB on the gamepad are enabled.
@@ -275,6 +280,15 @@ local function GroupOf(tool: Instance): string?
 	return GROUP_BY_NAME[tool.Name]
 end
 
+-- What a group icon cell draws for `tool`: its image. Nil when it has none
+type IconEntry = { image: string? }
+local function IconEntryFor(tool: Tool): IconEntry?
+	if tool.TextureId ~= "" then
+		return { image = tool.TextureId }
+	end
+	return nil
+end
+
 -- A group's members in icon order
 local function SortedMembers(group: string): { Tool }
 	local members = table.clone(GroupMembers[group] or {})
@@ -290,27 +304,72 @@ local function SortedMembers(group: string): { Tool }
 	return members
 end
 
--- The images for `tool`'s slot as a 2x2 icon (a group of two or more, or a tool listing its items),
--- or nil for the normal single icon
-local function GroupIconsFor(tool: Tool): { string }?
-	local icons = {}
+-- The other members of `tool`'s group slot, in order and without the one in hand: up to
+-- GROUP_ICON_OTHERS of them, or nil for the normal single icon (no group, or nothing else)
+local function GroupOthersFor(tool: Tool): { IconEntry }?
+	if IconEntryFor(tool) == nil then
+		return nil
+	end
+	local entries: { IconEntry } = {}
 	local group = GroupOf(tool)
-	if group and GroupMembers[group] and #GroupMembers[group] >= 2 then
+	if group and GroupMembers[group] then
 		for _, member in SortedMembers(group) do
-			if member.TextureId ~= "" then
-				table.insert(icons, member.TextureId)
+			local entry = if member ~= tool then IconEntryFor(member) else nil
+			if entry then
+				table.insert(entries, entry)
 			end
 		end
 	else
 		local listed = tool:GetAttribute(GROUP_ICONS_ATTRIBUTE)
 		if type(listed) == "string" and listed ~= "" then
-			icons = string.split(listed, ",")
+			for _, icon in string.split(listed, ",") do
+				if icon ~= tool.TextureId then
+					table.insert(entries, { image = icon })
+				end
+			end
 		end
 	end
-	if #icons < 2 then
+	if #entries == 0 then
 		return nil
 	end
-	return { table.unpack(icons, 1, math.min(#icons, GROUP_ICON_CELLS)) }
+	return { table.unpack(entries, 1, math.min(#entries, GROUP_ICON_OTHERS)) }
+end
+
+-- Draws `entry` in an icon cell
+local function DrawIconEntry(cell: ImageLabel, entry: IconEntry?): ()
+	cell.Image = entry and entry.image or ""
+end
+
+-- Places a group slot's icons in `frame` (its GroupIcons): `main` big, `others` small, in the
+-- layout this ModuleScript's `GroupIconLayout` attribute names ("Strip" or "Column")
+local function LayoutGroupIcon(frame: Frame, main: IconEntry, others: { IconEntry }): ()
+	local layout = targetScript:GetAttribute("GroupIconLayout")
+	if layout ~= "Strip" and layout ~= "Column" then
+		layout = GROUP_ICON_LAYOUT_DEFAULT
+	end
+	local mainIcon = frame:FindFirstChild("Main") :: ImageLabel
+	DrawIconEntry(mainIcon, main)
+	-- Strip: big icon on the top 68%, the others in a row of thirds underneath.
+	-- Column: big icon on the left 70%, the others stacked in thirds down the right side
+	if layout == "Strip" then
+		mainIcon.Position = UDim2.fromScale(0.16, 0)
+		mainIcon.Size = UDim2.fromScale(0.68, 0.68)
+	else
+		mainIcon.Position = UDim2.fromScale(0, 0.15)
+		mainIcon.Size = UDim2.fromScale(0.7, 0.7)
+	end
+	for cell: number = 1, GROUP_ICON_OTHERS do
+		local smallIcon = frame:FindFirstChild(`Small{cell}`) :: ImageLabel
+		DrawIconEntry(smallIcon, others[cell])
+		smallIcon.Visible = others[cell] ~= nil
+		if layout == "Strip" then
+			smallIcon.Position = UDim2.fromScale((cell - 1) / 3, 0.7)
+			smallIcon.Size = UDim2.fromScale(1 / 3, 0.3)
+		else
+			smallIcon.Position = UDim2.fromScale(0.72, (cell - 1) / 3)
+			smallIcon.Size = UDim2.fromScale(0.28, 1 / 3)
+		end
+	end
 end
 
 -- The slot showing `group`, or nil
@@ -465,6 +524,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	local ToolIcon: ImageLabel = nil
 	local ToolName: TextLabel = nil
 	local GroupGrid: Frame = nil
+	local GroupKeyHint: TextLabel = nil
 	local GroupIconsAttrConn: RBXScriptConnection? = nil
 	local ToolChangeConn: any = nil
 	local HighlightFrame: any = nil -- UIStroke
@@ -544,20 +604,17 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		end
 		assignToolData()
 
-		-- A group slot draws its 2x2 icon instead of the tool's own icon or 3D preview. Returns
-		-- whether it did
+		-- A group slot draws the item in hand big and up to three of the others small, instead of
+		-- the tool's own icon or 3D preview. Returns whether it did
 		local function showGroupIcon(): boolean
-			local icons = GroupIconsFor(tool)
-			if icons == nil then
+			local others = GroupOthersFor(tool)
+			if others == nil then
 				GroupGrid.Visible = false
 				return false
 			end
 			SlotFrame:SetAttribute("_ViewportDeferred", false)
 			SatchelViewportPreview.clearSlot(SlotFrame)
-			for cell: number = 1, GROUP_ICON_CELLS do
-				local cellIcon = GroupGrid:FindFirstChild(`Icon{cell}`) :: ImageLabel
-				cellIcon.Image = icons[cell] or ""
-			end
+			LayoutGroupIcon(GroupGrid, IconEntryFor(tool) :: IconEntry, others)
 			GroupGrid.Visible = true
 			ToolIcon.Visible = false
 			ToolName.Visible = false
@@ -586,9 +643,22 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		end
 
 		-- Redraws the icon when the group's members change (`OnChildAdded` / `OnChildRemoved`)
+		-- The group's key cap (`SetGroupHint`), on whichever slot shows the group
+		local function showKeyHint()
+			local group = GroupOf(tool)
+			local hint = group and GroupHints[group]
+			GroupKeyHint.Text = hint or ""
+			GroupKeyHint.Visible = hint ~= nil and hint ~= ""
+		end
+		showKeyHint()
+
 		local filled = self
 		filled.RefreshGroupIcon = function(): ()
-			if filled.Tool == tool and not showGroupIcon() then
+			if filled.Tool ~= tool then
+				return
+			end
+			showKeyHint()
+			if not showGroupIcon() then
 				-- Down to one member: back to the tool's own icon
 				ToolIcon.Visible = true
 				ToolName.Visible = (tool.TextureId == "")
@@ -688,6 +758,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			GroupIconsAttrConn = nil
 		end
 		GroupGrid.Visible = false
+		GroupKeyHint.Visible = false
 
 		SatchelViewportPreview.clearSlot(SlotFrame)
 		ToolIcon.Visible = true
@@ -902,29 +973,57 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	end
 	ToolIconCorner.Parent = ToolIcon
 
-	-- 2x2 icon for a group slot (see GroupIconsFor), shown instead of ToolIcon
+	-- Group slot icon (see GroupOthersFor, LayoutGroupIcon): `Main` (the item in hand) and `Small1`..
+	-- `Small3` (the others), shown instead of ToolIcon
 	GroupGrid = Instance.new("Frame")
 	GroupGrid.Name = "GroupIcons"
 	GroupGrid.BackgroundTransparency = 1
 	GroupGrid.AnchorPoint = Vector2.new(0.5, 0.5)
 	GroupGrid.Position = UDim2.fromScale(0.5, 0.5)
-	GroupGrid.Size = UDim2.fromScale(0.86, 0.86)
+	GroupGrid.Size = UDim2.fromScale(0.9, 0.9)
 	GroupGrid.Visible = false
 	GroupGrid.Interactable = false
-	local groupLayout: UIGridLayout = Instance.new("UIGridLayout")
-	groupLayout.CellSize = UDim2.new(0.5, -2, 0.5, -2)
-	groupLayout.CellPadding = UDim2.fromOffset(4, 4)
-	groupLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	groupLayout.Parent = GroupGrid
-	for cell: number = 1, GROUP_ICON_CELLS do
-		local cellIcon: ImageLabel = Instance.new("ImageLabel")
-		cellIcon.Name = `Icon{cell}`
-		cellIcon.LayoutOrder = cell
-		cellIcon.BackgroundTransparency = 1
-		cellIcon.ScaleType = Enum.ScaleType.Fit
-		cellIcon.Parent = GroupGrid
+	local mainIcon: ImageLabel = Instance.new("ImageLabel")
+	mainIcon.Name = "Main"
+	mainIcon.BackgroundTransparency = 1
+	mainIcon.ScaleType = Enum.ScaleType.Fit
+	mainIcon.Parent = GroupGrid
+	for cell: number = 1, GROUP_ICON_OTHERS do
+		local smallIcon: ImageLabel = Instance.new("ImageLabel")
+		smallIcon.Name = `Small{cell}`
+		smallIcon.BackgroundTransparency = 1
+		smallIcon.ScaleType = Enum.ScaleType.Fit
+		smallIcon.ImageTransparency = 0.15
+		smallIcon.Parent = GroupGrid
 	end
 	GroupGrid.Parent = SlotFrame
+
+	-- Key cap on a group slot: the key that opens the group's wheel (`SetGroupHint`), top right (the
+	-- slot number is top left, the small icons along the bottom or right)
+	GroupKeyHint = Instance.new("TextLabel")
+	GroupKeyHint.Name = "GroupKeyHint"
+	GroupKeyHint.AnchorPoint = Vector2.new(1, 0)
+	GroupKeyHint.Position = UDim2.new(1, -3, 0, 3)
+	GroupKeyHint.Size = UDim2.fromOffset(0, 16)
+	GroupKeyHint.AutomaticSize = Enum.AutomaticSize.X
+	GroupKeyHint.BackgroundColor3 = Color3.new(0, 0, 0)
+	GroupKeyHint.BackgroundTransparency = 0.25
+	GroupKeyHint.BorderSizePixel = 0
+	GroupKeyHint.FontFace = Font.new(FONT_FAMILY.Family, Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+	GroupKeyHint.TextSize = 13
+	GroupKeyHint.TextColor3 = Color3.new(1, 1, 1)
+	GroupKeyHint.Text = ""
+	GroupKeyHint.Visible = false
+	GroupKeyHint.Interactable = false
+	GroupKeyHint.ZIndex = 3
+	local keyHintCorner: UICorner = Instance.new("UICorner")
+	keyHintCorner.CornerRadius = UDim.new(0, 4)
+	keyHintCorner.Parent = GroupKeyHint
+	local keyHintPadding: UIPadding = Instance.new("UIPadding")
+	keyHintPadding.PaddingLeft = UDim.new(0, 4)
+	keyHintPadding.PaddingRight = UDim.new(0, 4)
+	keyHintPadding.Parent = GroupKeyHint
+	GroupKeyHint.Parent = SlotFrame
 
 	ToolName = Instance.new("TextLabel")
 	ToolName.BackgroundTransparency = 1
@@ -2535,6 +2634,16 @@ do -- Hotkey stuff
 end
 
 -- Sets whether the backpack is enabled or not
+-- Shows `text` as a small key cap on `group`'s slot (the key that opens its wheel), or removes it
+-- (nil or ""). The caller updates it when the key or the input type changes.
+function BackpackScript.SetGroupHint(group: string, text: string?): ()
+	GroupHints[group] = if text ~= nil and text ~= "" then text else nil
+	local slot: any = GroupSlot(group)
+	if slot then
+		slot:RefreshGroupIcon()
+	end
+end
+
 function BackpackScript:SetBackpackEnabled(Enabled: boolean): ()
 	BackpackEnabled = Enabled
 end
