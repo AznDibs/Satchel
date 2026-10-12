@@ -6,6 +6,7 @@
 	file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ]]
 
+local CollectionService = game:GetService("CollectionService")
 local ContextActionService = game:GetService("ContextActionService")
 local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
@@ -14,6 +15,7 @@ local StarterGui = game:GetService("StarterGui")
 local TextChatService = game:GetService("TextChatService")
 local UserInputService = game:GetService("UserInputService")
 local VRService = game:GetService("VRService")
+local KartPreview = require(game.StarterPlayer.StarterPlayerScripts.Modules.KartPreview)
 local SatchelViewportPreview = require(game.StarterPlayer.StarterPlayerScripts.Modules.SatchelViewportPreview)
 local PlayerGui: Instance = Players.LocalPlayer:WaitForChild("PlayerGui")
 
@@ -217,6 +219,19 @@ local GROUP_BY_NAME: { [string]: string } = {
 	Help = "Signs",
 	Panic = "Signs",
 }
+-- Tools with these CollectionService tags join a group too: every kart (owner 2026-10-11), except
+-- the job karts below, which keep their own slots, and the KartData template
+local GROUP_BY_TAG: { [string]: string } = {
+	KartTool = "Karts",
+}
+local GROUP_TAG_EXCLUDED: { [string]: boolean } = {
+	TemplateKart = true,
+	Bus = true,
+	BusKart = true,
+	FarmKart = true,
+}
+-- Tag of kart tools: they have no TextureId, so their group icons are 3D kart previews (KartPreview)
+local KART_TOOL_TAG = "KartTool"
 -- Order of a group's members on its icon and wheel (unlisted members go last, by name)
 local GROUP_ORDER: { [string]: { string } } = {
 	Signs = { "Riot", "Praise", "Help", "Panic" },
@@ -278,14 +293,27 @@ local function GroupOf(tool: Instance): string?
 	if type(attribute) == "string" and attribute ~= "" then
 		return attribute
 	end
-	return GROUP_BY_NAME[tool.Name]
+	if GROUP_BY_NAME[tool.Name] then
+		return GROUP_BY_NAME[tool.Name]
+	end
+	if not GROUP_TAG_EXCLUDED[tool.Name] then
+		for tag, group in GROUP_BY_TAG do
+			if CollectionService:HasTag(tool, tag) then
+				return group
+			end
+		end
+	end
+	return nil
 end
 
--- What a group icon cell draws for `tool`: its image. Nil when it has none
-type IconEntry = { image: string? }
+-- What a group icon cell draws for `tool`: its image, or a 3D preview of a kart (karts have no
+-- TextureId). Nil when it has neither
+type IconEntry = { image: string?, kart: string? }
 local function IconEntryFor(tool: Tool): IconEntry?
 	if tool.TextureId ~= "" then
 		return { image = tool.TextureId }
+	elseif CollectionService:HasTag(tool, KART_TOOL_TAG) then
+		return { kart = tool.Name }
 	end
 	return nil
 end
@@ -336,9 +364,17 @@ local function GroupOthersFor(tool: Tool): { IconEntry }?
 	return { table.unpack(entries, 1, math.min(#entries, GROUP_ICON_OTHERS)) }
 end
 
--- Draws `entry` in an icon cell
+-- Draws `entry` in an icon cell: its image, or a 3D kart preview (rebuilt only when the kart changes)
 local function DrawIconEntry(cell: ImageLabel, entry: IconEntry?): ()
+	local kart = entry and entry.kart
 	cell.Image = entry and entry.image or ""
+	if cell:GetAttribute("_Kart") ~= kart then
+		cell:SetAttribute("_Kart", kart)
+		KartPreview.cleanup(cell)
+		if kart then
+			KartPreview.createKartPreview(cell, kart)
+		end
+	end
 end
 
 -- Places a group slot's icons in `frame` (its GroupIcons): `main` big, `others` small, in the
