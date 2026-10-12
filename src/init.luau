@@ -341,7 +341,9 @@ local function GroupOthersFor(tool: Tool): { IconEntry }?
 	end
 	local entries: { IconEntry } = {}
 	local group = GroupOf(tool)
-	if group and GroupMembers[group] then
+	-- A group of one tool (the instrument case: SatchelGroup only for its key cap) shows the items
+	-- that tool lists instead
+	if group and GroupMembers[group] and #GroupMembers[group] >= 2 then
 		for _, member in SortedMembers(group) do
 			local entry = if member ~= tool then IconEntryFor(member) else nil
 			if entry then
