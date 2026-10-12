@@ -231,7 +231,8 @@ local GROUP_ICON_OTHERS = 3
 -- Read at draw time from this ModuleScript's `GroupIconLayout` attribute, so both can be compared live
 local GROUP_ICON_LAYOUT_DEFAULT = "Strip"
 local GroupMembers: { [string]: { Tool } } = {} -- Group name -> its tools in the Backpack or Character
-local GroupHints: { [string]: string } = {} -- Group name -> key cap text on its slot (`SetGroupHint`)
+-- Group name -> its slot's key hint (`SetGroupHint`): a key name drawn as a cap, or a controller glyph image
+local GroupHints: { [string]: { text: string?, image: string? } } = {}
 local HotkeyFns = {} -- Map of KeyCode values to their assigned behaviors
 local Dragging: { boolean } = {} -- Only used to check if anything is being dragged, to disable other input
 local FullHotbarSlots: number = 0 -- Now being used to also determine whether or not LB and RB on the gamepad are enabled.
@@ -647,8 +648,14 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		local function showKeyHint()
 			local group = GroupOf(tool)
 			local hint = group and GroupHints[group]
-			GroupKeyHint.Text = hint or ""
-			GroupKeyHint.Visible = hint ~= nil and hint ~= ""
+			local image = hint and hint.image
+			local glyph = GroupKeyHint:FindFirstChild("Glyph") :: ImageLabel
+			glyph.Image = image or ""
+			glyph.Visible = image ~= nil
+			-- A glyph draws its own button shape, so it goes without the dark cap
+			GroupKeyHint.BackgroundTransparency = if image then 1 else 0.25
+			GroupKeyHint.Text = if image then "" else hint and hint.text or ""
+			GroupKeyHint.Visible = hint ~= nil
 		end
 		showKeyHint()
 
@@ -1023,6 +1030,14 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	keyHintPadding.PaddingLeft = UDim.new(0, 4)
 	keyHintPadding.PaddingRight = UDim.new(0, 4)
 	keyHintPadding.Parent = GroupKeyHint
+	-- Controller glyph shown in place of the key name (SetGroupHint's image)
+	local keyGlyph: ImageLabel = Instance.new("ImageLabel")
+	keyGlyph.Name = "Glyph"
+	keyGlyph.BackgroundTransparency = 1
+	keyGlyph.ScaleType = Enum.ScaleType.Fit
+	keyGlyph.Size = UDim2.fromOffset(18, 18)
+	keyGlyph.Visible = false
+	keyGlyph.Parent = GroupKeyHint
 	GroupKeyHint.Parent = SlotFrame
 
 	ToolName = Instance.new("TextLabel")
@@ -2537,6 +2552,11 @@ do -- Make the Inventory expand/collapse arrow (unless TopBar)
 			-- Inventory opened: render any deferred slots
 			for i = NumberOfHotbarSlots + 1, #Slots do
 				local s = Slots[i]
+				-- A group slot draws its own icon (GroupIcons), never the tool's flat icon or preview
+				local groupIcons = s and s.Frame:FindFirstChild("GroupIcons")
+				if groupIcons and groupIcons.Visible then
+					continue
+				end
 				if s and s.Tool and s.Frame:GetAttribute("_ViewportDeferred") then
 					s.Frame:SetAttribute("_ViewportDeferred", false)
 					local vpRendered = SatchelViewportPreview.renderSlot(s.Frame, s.Tool)
@@ -2558,6 +2578,10 @@ do -- Make the Inventory expand/collapse arrow (unless TopBar)
 			-- Inventory closed: clean up inventory slot viewports to save GPU
 			for i = NumberOfHotbarSlots + 1, #Slots do
 				local s = Slots[i]
+				local groupIcons = s and s.Frame and s.Frame:FindFirstChild("GroupIcons")
+				if groupIcons and groupIcons.Visible then
+					continue
+				end
 				if s and s.Frame then
 					SatchelViewportPreview.clearSlot(s.Frame)
 					local icon = s.Frame:FindFirstChild("Icon")
@@ -2634,10 +2658,15 @@ do -- Hotkey stuff
 end
 
 -- Sets whether the backpack is enabled or not
--- Shows `text` as a small key cap on `group`'s slot (the key that opens its wheel), or removes it
--- (nil or ""). The caller updates it when the key or the input type changes.
-function BackpackScript.SetGroupHint(group: string, text: string?): ()
-	GroupHints[group] = if text ~= nil and text ~= "" then text else nil
+-- Shows the key that opens `group`'s wheel on its slot: `image` (a controller glyph from
+-- GetImageForKeyCode) when given, else `text` as a small key cap; nothing when both are nil or "".
+-- The caller updates it when the key or the input type changes.
+function BackpackScript.SetGroupHint(group: string, text: string?, image: string?): ()
+	local hasText = text ~= nil and text ~= ""
+	local hasImage = image ~= nil and image ~= ""
+	GroupHints[group] = if hasText or hasImage
+		then { text = if hasText then text else nil, image = if hasImage then image else nil }
+		else nil
 	local slot: any = GroupSlot(group)
 	if slot then
 		slot:RefreshGroupIcon()
