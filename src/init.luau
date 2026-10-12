@@ -207,6 +207,26 @@ local Backpack: Instance = Player:WaitForChild("Backpack")
 local Slots = {} -- List of all Slots by index
 local LowestEmptySlot: any = nil
 local SlotsByTool = {} -- Map of Tools to their assigned Slots
+-- Tool groups: several tools shown as ONE slot, which holds the group's current member (the one
+-- last equipped). The other members get no slot; a wheel (GRG's ItemWheel) swaps between them.
+-- Members are found by tool name (the signs are cloned by RiotHandler and by chat words, so they
+-- carry no attributes) or by a tool's `SatchelGroup` attribute.
+local GROUP_BY_NAME: { [string]: string } = {
+	Riot = "Signs",
+	Praise = "Signs",
+	Help = "Signs",
+	Panic = "Signs",
+}
+-- Order of a group's members on its 2x2 icon (unlisted members go last, by name)
+local GROUP_ORDER: { [string]: { string } } = {
+	Signs = { "Riot", "Praise", "Help", "Panic" },
+}
+-- Tool attribute: comma-separated image ids drawn as the slot's 2x2 icon, for one tool that holds
+-- several items (the instrument case)
+local GROUP_ICONS_ATTRIBUTE = "SatchelGroupIcons"
+-- Cells in the 2x2 icon
+local GROUP_ICON_CELLS = 4
+local GroupMembers: { [string]: { Tool } } = {} -- Group name -> its tools in the Backpack or Character
 local HotkeyFns = {} -- Map of KeyCode values to their assigned behaviors
 local Dragging: { boolean } = {} -- Only used to check if anything is being dragged, to disable other input
 local FullHotbarSlots: number = 0 -- Now being used to also determine whether or not LB and RB on the gamepad are enabled.
@@ -240,6 +260,64 @@ local function FindLowestEmpty(): number?
 	for i: number = 1, NumberOfHotbarSlots do
 		local slot: any = Slots[i]
 		if not slot.Tool then
+			return slot
+		end
+	end
+	return nil
+end
+
+-- The group `tool` belongs to, or nil
+local function GroupOf(tool: Instance): string?
+	local attribute = tool:GetAttribute("SatchelGroup")
+	if type(attribute) == "string" and attribute ~= "" then
+		return attribute
+	end
+	return GROUP_BY_NAME[tool.Name]
+end
+
+-- A group's members in icon order
+local function SortedMembers(group: string): { Tool }
+	local members = table.clone(GroupMembers[group] or {})
+	local order = GROUP_ORDER[group] or {}
+	table.sort(members, function(a: Tool, b: Tool): boolean
+		local orderA = table.find(order, a.Name) or math.huge
+		local orderB = table.find(order, b.Name) or math.huge
+		if orderA ~= orderB then
+			return orderA < orderB
+		end
+		return a.Name < b.Name
+	end)
+	return members
+end
+
+-- The images for `tool`'s slot as a 2x2 icon (a group of two or more, or a tool listing its items),
+-- or nil for the normal single icon
+local function GroupIconsFor(tool: Tool): { string }?
+	local icons = {}
+	local group = GroupOf(tool)
+	if group and GroupMembers[group] and #GroupMembers[group] >= 2 then
+		for _, member in SortedMembers(group) do
+			if member.TextureId ~= "" then
+				table.insert(icons, member.TextureId)
+			end
+		end
+	else
+		local listed = tool:GetAttribute(GROUP_ICONS_ATTRIBUTE)
+		if type(listed) == "string" and listed ~= "" then
+			icons = string.split(listed, ",")
+		end
+	end
+	if #icons < 2 then
+		return nil
+	end
+	return { table.unpack(icons, 1, math.min(#icons, GROUP_ICON_CELLS)) }
+end
+
+-- The slot showing `group`, or nil
+local function GroupSlot(group: string): any
+	for _, member in GroupMembers[group] or {} do
+		local slot = SlotsByTool[member]
+		if slot then
 			return slot
 		end
 	end
@@ -379,11 +457,15 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	slot.Tool = nil :: any
 	slot.Index = index :: number
 	slot.Frame = nil :: any
+	-- Replaced by `Fill` (redraws a group slot's 2x2 icon)
+	function slot:RefreshGroupIcon(): () end
 
 	local SlotFrame: any = nil
 	local FakeSlotFrame: Frame = nil
 	local ToolIcon: ImageLabel = nil
 	local ToolName: TextLabel = nil
+	local GroupGrid: Frame = nil
+	local GroupIconsAttrConn: RBXScriptConnection? = nil
 	local ToolChangeConn: any = nil
 	local HighlightFrame: any = nil -- UIStroke
 	local SelectionObj: ImageLabel = nil
@@ -462,11 +544,33 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		end
 		assignToolData()
 
+		-- A group slot draws its 2x2 icon instead of the tool's own icon or 3D preview. Returns
+		-- whether it did
+		local function showGroupIcon(): boolean
+			local icons = GroupIconsFor(tool)
+			if icons == nil then
+				GroupGrid.Visible = false
+				return false
+			end
+			SlotFrame:SetAttribute("_ViewportDeferred", false)
+			SatchelViewportPreview.clearSlot(SlotFrame)
+			for cell: number = 1, GROUP_ICON_CELLS do
+				local cellIcon = GroupGrid:FindFirstChild(`Icon{cell}`) :: ImageLabel
+				cellIcon.Image = icons[cell] or ""
+			end
+			GroupGrid.Visible = true
+			ToolIcon.Visible = false
+			ToolName.Visible = false
+			return true
+		end
+
 		-- ── Viewport preview (replaces flat icon when possible) ──────────
 		-- Defer viewport creation for inventory slots when panel is closed
 		local isInventorySlot = self.Index > NumberOfHotbarSlots
 		local invVisible = InventoryFrame and InventoryFrame.Visible
-		if isInventorySlot and not invVisible then
+		if showGroupIcon() then
+			-- Drawn above
+		elseif isInventorySlot and not invVisible then
 			SlotFrame:SetAttribute("_ViewportDeferred", true)
 			ToolIcon.Visible = true
 		else
@@ -481,6 +585,21 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			end
 		end
 
+		-- Redraws the icon when the group's members change (`OnChildAdded` / `OnChildRemoved`)
+		local filled = self
+		filled.RefreshGroupIcon = function(): ()
+			if filled.Tool == tool and not showGroupIcon() then
+				-- Down to one member: back to the tool's own icon
+				ToolIcon.Visible = true
+				ToolName.Visible = (tool.TextureId == "")
+			end
+		end
+
+		if GroupIconsAttrConn then
+			GroupIconsAttrConn:Disconnect()
+		end
+		GroupIconsAttrConn = tool:GetAttributeChangedSignal(GROUP_ICONS_ATTRIBUTE):Connect(filled.RefreshGroupIcon)
+
 		-- Disconnect tool event if it exists
 		if ToolChangeConn then
 			ToolChangeConn:Disconnect()
@@ -491,6 +610,9 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		ToolChangeConn = tool.Changed:Connect(function(property: string): ()
 			if property == "TextureId" or property == "Name" or property == "ToolTip" then
 				assignToolData()
+				if showGroupIcon() then
+					return
+				end
 				-- Refresh viewport preview (skip if deferred)
 				if SlotFrame:GetAttribute("_ViewportDeferred") then
 					return
@@ -560,6 +682,12 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			CurrentUsesAttrChangeConn:Disconnect()
 			CurrentUsesAttrChangeConn = nil
 		end
+
+		if GroupIconsAttrConn then
+			GroupIconsAttrConn:Disconnect()
+			GroupIconsAttrConn = nil
+		end
+		GroupGrid.Visible = false
 
 		SatchelViewportPreview.clearSlot(SlotFrame)
 		ToolIcon.Visible = true
@@ -773,6 +901,30 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		ToolIconCorner.CornerRadius = SLOT_CORNER_RADIUS
 	end
 	ToolIconCorner.Parent = ToolIcon
+
+	-- 2x2 icon for a group slot (see GroupIconsFor), shown instead of ToolIcon
+	GroupGrid = Instance.new("Frame")
+	GroupGrid.Name = "GroupIcons"
+	GroupGrid.BackgroundTransparency = 1
+	GroupGrid.AnchorPoint = Vector2.new(0.5, 0.5)
+	GroupGrid.Position = UDim2.fromScale(0.5, 0.5)
+	GroupGrid.Size = UDim2.fromScale(0.86, 0.86)
+	GroupGrid.Visible = false
+	GroupGrid.Interactable = false
+	local groupLayout: UIGridLayout = Instance.new("UIGridLayout")
+	groupLayout.CellSize = UDim2.new(0.5, -2, 0.5, -2)
+	groupLayout.CellPadding = UDim2.fromOffset(4, 4)
+	groupLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	groupLayout.Parent = GroupGrid
+	for cell: number = 1, GROUP_ICON_CELLS do
+		local cellIcon: ImageLabel = Instance.new("ImageLabel")
+		cellIcon.Name = `Icon{cell}`
+		cellIcon.LayoutOrder = cell
+		cellIcon.BackgroundTransparency = 1
+		cellIcon.ScaleType = Enum.ScaleType.Fit
+		cellIcon.Parent = GroupGrid
+	end
+	GroupGrid.Parent = SlotFrame
 
 	ToolName = Instance.new("TextLabel")
 	ToolName.BackgroundTransparency = 1
@@ -1126,6 +1278,34 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 		end
 	end
 
+	-- A group member: the group keeps one slot. A member arriving in the Character (picked on the
+	-- wheel, or equipped by chat words) becomes the slot's tool; one arriving in the Backpack only
+	-- joins the group's icon
+	local group: string? = GroupOf(tool)
+	if group then
+		local members = GroupMembers[group]
+		if not members then
+			members = {}
+			GroupMembers[group] = members
+		end
+		if not table.find(members, tool) then
+			table.insert(members, tool)
+		end
+		local groupSlot: any = GroupSlot(group)
+		if groupSlot and groupSlot.Tool ~= tool then
+			if tool.Parent == Character then
+				groupSlot:Clear()
+				groupSlot:Fill(tool)
+			else
+				groupSlot:RefreshGroupIcon()
+				BackpackScript.BackpackItemAdded:Fire()
+				return
+			end
+		elseif groupSlot then
+			groupSlot:RefreshGroupIcon()
+		end
+	end
+
 	-- The tool is either moving or new
 	local slot: any = SlotsByTool[tool]
 	if slot then
@@ -1178,6 +1358,27 @@ local function OnChildRemoved(child: Instance): () -- From Character or Backpack
 	end
 
 	local slot: any = SlotsByTool[tool]
+
+	-- A group member left: when it was the one on the slot, another member takes the slot
+	local group: string? = GroupOf(tool)
+	local members = group and GroupMembers[group]
+	if members then
+		local at = table.find(members, tool)
+		if at then
+			table.remove(members, at)
+		end
+		if slot and #members > 0 then
+			slot:Clear()
+			slot:Fill(members[1])
+			BackpackScript.BackpackItemRemoved:Fire()
+			return
+		end
+		local groupSlot: any = GroupSlot(group :: string)
+		if groupSlot then
+			groupSlot:RefreshGroupIcon()
+		end
+	end
+
 	if slot then
 		slot:Clear()
 		if slot.Index > NumberOfHotbarSlots then -- Inventory slot
@@ -1209,6 +1410,8 @@ local function OnCharacterAdded(character: Model): ()
 		end
 	end
 	ActiveHopper = nil :: any --NOTE: HopperBin
+	-- Groups are rebuilt from the new Backpack and Character below
+	table.clear(GroupMembers)
 
 	-- And any old Connections
 	for _, conn: RBXScriptConnection in pairs(CharConns) do
