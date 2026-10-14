@@ -1476,8 +1476,14 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 			AdjustHotbarFrames()
 		end
 	else -- New! Put into lowest hotbar slot or new inventory slot
-		slot = LowestEmptySlot or MakeSlot(UIGridFrame)
+		-- A tool with the `SatchelStartInInventory` attribute starts in the inventory, not the hotbar
+		-- (GRG's instrument case, given to everyone while jams are on)
+		local startInInventory = tool:GetAttribute("SatchelStartInInventory") == true
+		slot = if startInInventory then MakeSlot(UIGridFrame) else LowestEmptySlot or MakeSlot(UIGridFrame)
 		slot:Fill(tool)
+		if startInInventory and ViewingSearchResults then
+			slot.Frame.Visible = false
+		end
 		if slot.Index <= NumberOfHotbarSlots and not InventoryFrame.Visible then
 			AdjustHotbarFrames()
 		end
