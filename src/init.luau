@@ -1487,9 +1487,6 @@ local function OnChildAdded(child: Instance): () -- To Character or Backpack
 				ActiveHopper = tool
 			end
 		end
-		if signs[tool.Name] and slot.Index <= NumberOfHotbarSlots then
-			slot:MoveToInventory()
-		end
 	end
 
 	BackpackScript.BackpackItemAdded:Fire()
