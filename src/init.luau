@@ -234,7 +234,7 @@ local GROUP_TAG_EXCLUDED: { [string]: boolean } = {
 local KART_TOOL_TAG = "KartTool"
 -- Order of a group's members on its icon and wheel (unlisted members go last, by name)
 local GROUP_ORDER: { [string]: { string } } = {
-	Signs = { "Riot", "Praise", "Help", "Panic" },
+	Signs = { "Praise", "Riot", "Help", "Panic" },
 }
 -- Tool attribute: comma-separated image ids of everything one tool holds (the instrument case);
 -- its slot shows the held one (TextureId) big and some of the rest small, like a group
