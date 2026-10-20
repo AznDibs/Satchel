@@ -426,7 +426,8 @@ local function GroupSlot(group: string): any
 	return nil
 end
 
--- Tells the `SetGroupHover` handler about `event` on `slot`, when it shows a group of 2+ tools.
+-- Tells the `SetGroupHover` handler about `event` on `slot`, when it shows a group of 2+ tools or a
+-- group of one tool that lists what it holds (the instrument case, `SatchelGroupIcons`).
 -- True when the handler shows its own popover (the slot's ToolTip then stays hidden)
 local function NotifyGroupHover(slot: any, slotFrame: GuiObject, event: GroupHoverEvent): boolean
 	local tool = slot.Tool
@@ -434,7 +435,12 @@ local function NotifyGroupHover(slot: any, slotFrame: GuiObject, event: GroupHov
 		return false
 	end
 	local group = GroupOf(tool)
-	if group == nil or GroupMembers[group] == nil or #GroupMembers[group] < 2 then
+	if group == nil or GroupMembers[group] == nil then
+		return false
+	end
+	local listed = tool:GetAttribute(GROUP_ICONS_ATTRIBUTE)
+	local holdsSeveral = type(listed) == "string" and string.find(listed, ",", 1, true) ~= nil
+	if #GroupMembers[group] < 2 and not holdsSeveral then
 		return false
 	end
 	if event == "Enter" and next(Dragging) then
