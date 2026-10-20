@@ -248,6 +248,10 @@ local GROUP_ICON_LAYOUT_DEFAULT = "Strip"
 local GroupMembers: { [string]: { Tool } } = {} -- Group name -> its tools in the Backpack or Character
 -- Group name -> its slot's key hint (`SetGroupHint`): a key name drawn as a cap, or a controller glyph image
 local GroupHints: { [string]: { text: string?, image: string? } } = {}
+-- Hover handler for group slots (`SetGroupHover`): GRG's grid card of the group's tools on PC.
+-- `event` is "Enter" or "Leave" (the mouse) or "Drag" (the slot started being dragged)
+type GroupHoverEvent = "Enter" | "Leave" | "Drag"
+local GroupHoverHandler: ((group: string, tool: Tool, slotFrame: GuiObject, event: GroupHoverEvent) -> boolean?)? = nil
 local HotkeyFns = {} -- Map of KeyCode values to their assigned behaviors
 local Dragging: { boolean } = {} -- Only used to check if anything is being dragged, to disable other input
 local FullHotbarSlots: number = 0 -- Now being used to also determine whether or not LB and RB on the gamepad are enabled.
@@ -420,6 +424,23 @@ local function GroupSlot(group: string): any
 		end
 	end
 	return nil
+end
+
+-- Tells the `SetGroupHover` handler about `event` on `slot`, when it shows a group of 2+ tools.
+-- True when the handler shows its own popover (the slot's ToolTip then stays hidden)
+local function NotifyGroupHover(slot: any, slotFrame: GuiObject, event: GroupHoverEvent): boolean
+	local tool = slot.Tool
+	if GroupHoverHandler == nil or tool == nil or not tool:IsA("Tool") then
+		return false
+	end
+	local group = GroupOf(tool)
+	if group == nil or GroupMembers[group] == nil or #GroupMembers[group] < 2 then
+		return false
+	end
+	if event == "Enter" and next(Dragging) then
+		return false
+	end
+	return GroupHoverHandler(group, tool, slotFrame, event) == true
 end
 
 local function isInventoryEmpty(): boolean
@@ -1166,12 +1187,16 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 	-- because ScrollingFrame consumes MouseMovement InputBegan from children,
 	-- preventing tooltips from showing on hover for inventory slots.
 	SlotFrame.MouseEnter:Connect(function()
+		if NotifyGroupHover(slot, SlotFrame, "Enter") then
+			return
+		end
 		if ToolTip.Text ~= "" then
 			ToolTip.Visible = true
 		end
 	end)
 	SlotFrame.MouseLeave:Connect(function()
 		ToolTip.Visible = false
+		NotifyGroupHover(slot, SlotFrame, "Leave")
 	end)
 
 	if index <= NumberOfHotbarSlots then -- Hotbar-Specific Slot Stuff
@@ -1218,6 +1243,8 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 
 		SlotFrame.DragBegin:Connect(function(dragPoint: UDim2): ()
 			Dragging[SlotFrame] = true
+			-- A dragged group slot closes its hover card at once
+			NotifyGroupHover(slot, SlotFrame, "Drag")
 			startPoint = dragPoint
 
 			SlotFrame.BorderSizePixel = 2
@@ -2712,6 +2739,19 @@ function BackpackScript.SetGroupHint(group: string, text: string?, image: string
 	if slot then
 		slot:RefreshGroupIcon()
 	end
+end
+
+-- Sets the handler told when the mouse enters ("Enter") or leaves ("Leave") a slot that shows a
+-- group of 2+ tools (hotbar or inventory), and when such a slot starts being dragged ("Drag").
+-- Return true from "Enter" when it shows its own popover, so the slot's ToolTip doesn't show under
+-- it. Satchel never opens anything itself; nil removes the handler.
+function BackpackScript.SetGroupHover(handler: ((
+	group: string,
+	tool: Tool,
+	slotFrame: GuiObject,
+	event: GroupHoverEvent
+) -> boolean?)?): ()
+	GroupHoverHandler = handler
 end
 
 function BackpackScript:SetBackpackEnabled(Enabled: boolean): ()
