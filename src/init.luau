@@ -313,8 +313,8 @@ end
 -- Puts a kart's team paint layer on a flat icon (KartIcons via SatchelViewportPreview), or removes it. Cosmetic, so
 -- never allowed to throw into Fill: an error there stopped the slot before it registered its tool, and every group
 -- member then got its own slot (2026-10-27, a Studio missing the KartIcons module)
-local function DecorateIcon(icon: ImageLabel, kartName: string?): ()
-	local ok, err = pcall(SatchelViewportPreview.decorateIcon, icon, kartName)
+local function DecorateIcon(icon: ImageLabel, kartName: string?, tool: Tool?): ()
+	local ok, err = pcall(SatchelViewportPreview.decorateIcon, icon, kartName, tool)
 	if not ok then
 		warn("[Satchel] icon decoration failed:", err)
 	end
@@ -663,7 +663,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			local icon: string = tool.TextureId
 			ToolIcon.Image = icon
 			-- A kart's team paint layer over its flat icon (KartIcons), or none
-			DecorateIcon(ToolIcon, if CollectionService:HasTag(tool, KART_TOOL_TAG) then tool.Name else nil)
+			DecorateIcon(ToolIcon, if CollectionService:HasTag(tool, KART_TOOL_TAG) then tool.Name else nil, tool)
 
 			if icon ~= "" then
 				-- Enable the tool name on the slot if there is no icon
