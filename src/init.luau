@@ -310,6 +310,16 @@ local function GroupOf(tool: Instance): string?
 	return nil
 end
 
+-- Puts a kart's team paint layer on a flat icon (KartIcons via SatchelViewportPreview), or removes it. Cosmetic, so
+-- never allowed to throw into Fill: an error there stopped the slot before it registered its tool, and every group
+-- member then got its own slot (2026-10-27, a Studio missing the KartIcons module)
+local function DecorateIcon(icon: ImageLabel, kartName: string?): ()
+	local ok, err = pcall(SatchelViewportPreview.decorateIcon, icon, kartName)
+	if not ok then
+		warn("[Satchel] icon decoration failed:", err)
+	end
+end
+
 -- What a group icon cell draws for `tool`: its image (a kart's gets its team paint layer), or a 3D
 -- preview of a kart without one. Nil when it has neither
 type IconEntry = { image: string?, kart: string? }
@@ -375,7 +385,7 @@ end
 -- kart has no image (rebuilt only when the kart changes)
 local function DrawIconEntry(cell: ImageLabel, entry: IconEntry?): ()
 	cell.Image = entry and entry.image or ""
-	SatchelViewportPreview.decorateIcon(cell, entry and entry.image and entry.kart)
+	DecorateIcon(cell, entry and entry.image and entry.kart)
 	local kart = if entry and entry.image == nil then entry.kart else nil
 	if cell:GetAttribute("_Kart") ~= kart then
 		cell:SetAttribute("_Kart", kart)
@@ -653,10 +663,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			local icon: string = tool.TextureId
 			ToolIcon.Image = icon
 			-- A kart's team paint layer over its flat icon (KartIcons), or none
-			SatchelViewportPreview.decorateIcon(
-				ToolIcon,
-				if CollectionService:HasTag(tool, KART_TOOL_TAG) then tool.Name else nil
-			)
+			DecorateIcon(ToolIcon, if CollectionService:HasTag(tool, KART_TOOL_TAG) then tool.Name else nil)
 
 			if icon ~= "" then
 				-- Enable the tool name on the slot if there is no icon
@@ -844,7 +851,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		ToolIcon.Visible = true
 		ToolName.Visible = true
 		ToolIcon.Image = ""
-		SatchelViewportPreview.decorateIcon(ToolIcon, nil)
+		DecorateIcon(ToolIcon, nil)
 		ToolName.Text = ""
 		if ToolTip then
 			ToolTip.Text = ""
