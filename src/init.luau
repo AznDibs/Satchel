@@ -310,14 +310,15 @@ local function GroupOf(tool: Instance): string?
 	return nil
 end
 
--- What a group icon cell draws for `tool`: its image, or a 3D preview of a kart (karts have no
--- TextureId). Nil when it has neither
+-- What a group icon cell draws for `tool`: its image (a kart's gets its team paint layer), or a 3D
+-- preview of a kart without one. Nil when it has neither
 type IconEntry = { image: string?, kart: string? }
 local function IconEntryFor(tool: Tool): IconEntry?
+	local kart = if CollectionService:HasTag(tool, KART_TOOL_TAG) then tool.Name else nil
 	if tool.TextureId ~= "" then
-		return { image = tool.TextureId }
-	elseif CollectionService:HasTag(tool, KART_TOOL_TAG) then
-		return { kart = tool.Name }
+		return { image = tool.TextureId, kart = kart }
+	elseif kart then
+		return { kart = kart }
 	end
 	return nil
 end
@@ -370,10 +371,12 @@ local function GroupOthersFor(tool: Tool): { IconEntry }?
 	return { table.unpack(entries, 1, math.min(#entries, GROUP_ICON_OTHERS)) }
 end
 
--- Draws `entry` in an icon cell: its image, or a 3D kart preview (rebuilt only when the kart changes)
+-- Draws `entry` in an icon cell: its image (a kart's with its team paint), or a 3D kart preview when a
+-- kart has no image (rebuilt only when the kart changes)
 local function DrawIconEntry(cell: ImageLabel, entry: IconEntry?): ()
-	local kart = entry and entry.kart
 	cell.Image = entry and entry.image or ""
+	SatchelViewportPreview.decorateIcon(cell, entry and entry.image and entry.kart)
+	local kart = if entry and entry.image == nil then entry.kart else nil
 	if cell:GetAttribute("_Kart") ~= kart then
 		cell:SetAttribute("_Kart", kart)
 		KartPreview.cleanup(cell)
@@ -649,6 +652,11 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		local function assignToolData(): ()
 			local icon: string = tool.TextureId
 			ToolIcon.Image = icon
+			-- A kart's team paint layer over its flat icon (KartIcons), or none
+			SatchelViewportPreview.decorateIcon(
+				ToolIcon,
+				if CollectionService:HasTag(tool, KART_TOOL_TAG) then tool.Name else nil
+			)
 
 			if icon ~= "" then
 				-- Enable the tool name on the slot if there is no icon
@@ -836,6 +844,7 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 		ToolIcon.Visible = true
 		ToolName.Visible = true
 		ToolIcon.Image = ""
+		SatchelViewportPreview.decorateIcon(ToolIcon, nil)
 		ToolName.Text = ""
 		if ToolTip then
 			ToolTip.Text = ""
