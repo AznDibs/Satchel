@@ -223,6 +223,11 @@ local GROUP_BY_NAME: { [string]: string } = {
 -- the job karts below, which keep their own slots, and the KartData template
 local GROUP_BY_TAG: { [string]: string } = {
 	KartTool = "Karts",
+	-- Work tools, every tier (owner 2026-10-29): GRG tags each tier with its tool kind
+	Axe = "Work",
+	Hammer = "Work",
+	Sickle = "Work",
+	FishingNet = "Work",
 }
 local GROUP_TAG_EXCLUDED: { [string]: boolean } = {
 	TemplateKart = true,
@@ -232,10 +237,14 @@ local GROUP_TAG_EXCLUDED: { [string]: boolean } = {
 }
 -- Tag of kart tools: they have no TextureId, so their group icons are 3D kart previews (KartPreview)
 local KART_TOOL_TAG = "KartTool"
--- Order of a group's members on its icon and wheel (unlisted members go last, by name)
+-- Order of a group's members on its icon and wheel, by tool name or CollectionService tag (unlisted
+-- members go last, by name). Work follows the order the tools had in the hotbar before grouping
 local GROUP_ORDER: { [string]: { string } } = {
 	Signs = { "Praise", "Riot", "Help", "Panic" },
+	Work = { "Axe", "Hammer", "Sickle", "FishingNet" },
 }
+-- Groups switched off (`SetGroupEnabled`): their tools take a slot each, as if they had no group
+local DisabledGroups: { [string]: boolean } = {}
 -- Tool attribute: comma-separated image ids of everything one tool holds (the instrument case);
 -- its slot shows the held one (TextureId) big and some of the rest small, like a group
 local GROUP_ICONS_ATTRIBUTE = "SatchelGroupIcons"
@@ -291,8 +300,8 @@ local function FindLowestEmpty(): number?
 	return nil
 end
 
--- The group `tool` belongs to, or nil
-local function GroupOf(tool: Instance): string?
+-- The group `tool` would belong to, whether or not that group is switched off
+local function GroupNameOf(tool: Instance): string?
 	local attribute = tool:GetAttribute("SatchelGroup")
 	if type(attribute) == "string" and attribute ~= "" then
 		return attribute
@@ -308,6 +317,15 @@ local function GroupOf(tool: Instance): string?
 		end
 	end
 	return nil
+end
+
+-- The group `tool` belongs to, or nil (no group, or its group is switched off)
+local function GroupOf(tool: Instance): string?
+	local group = GroupNameOf(tool)
+	if group and DisabledGroups[group] then
+		return nil
+	end
+	return group
 end
 
 -- Puts a kart's team paint layer on a flat icon (KartIcons via SatchelViewportPreview), or removes it. Cosmetic, so
@@ -337,9 +355,18 @@ end
 local function SortedMembers(group: string): { Tool }
 	local members = table.clone(GroupMembers[group] or {})
 	local order = GROUP_ORDER[group] or {}
+	-- A member's place in `order`: its name, else its first listed tag
+	local function rank(tool: Tool): number
+		for i, entry in order do
+			if tool.Name == entry or CollectionService:HasTag(tool, entry) then
+				return i
+			end
+		end
+		return math.huge
+	end
 	table.sort(members, function(a: Tool, b: Tool): boolean
-		local orderA = table.find(order, a.Name) or math.huge
-		local orderB = table.find(order, b.Name) or math.huge
+		local orderA = rank(a)
+		local orderB = rank(b)
 		if orderA ~= orderB then
 			return orderA < orderB
 		end
@@ -735,7 +762,8 @@ local function MakeSlot(parent: Instance, initIndex: number?): GuiObject
 			-- A glyph draws its own button shape, so it goes without the dark cap
 			GroupKeyHint.BackgroundTransparency = if image then 1 else 0.25
 			GroupKeyHint.Text = if image then "" else hint and hint.text or ""
-			GroupKeyHint.Visible = hint ~= nil
+			-- Only while there is something to swap to: a role with just one work tool gets a plain slot
+			GroupKeyHint.Visible = hint ~= nil and GroupOthersFor(tool) ~= nil
 		end
 		showKeyHint()
 
@@ -2745,6 +2773,127 @@ do -- Hotkey stuff
 			gamepadDisconnected()
 		end
 	end)
+end
+
+-- Moves the hotbar's tools down into empty slots, keeping their order (a regrouped group leaves gaps)
+local function CompactHotbar(): ()
+	local tools: { Tool } = {}
+	for i: number = 1, NumberOfHotbarSlots do
+		local slot: any = Slots[i]
+		if slot.Tool then
+			table.insert(tools, slot.Tool)
+		end
+	end
+	for i: number = 1, NumberOfHotbarSlots do
+		local slot: any = Slots[i]
+		local want = tools[i]
+		if slot.Tool ~= want then
+			slot:Clear()
+			if want then
+				local from: any = SlotsByTool[want]
+				if from then
+					from:Clear()
+				end
+				slot:Fill(want)
+			end
+		end
+	end
+end
+
+-- Switches a group on or off for this player (GRG's settings): off gives each of its tools its own
+-- slot (new slots go in the hotbar's empty slots, then the inventory); on folds them back into
+-- one slot, the tool in hand's or else the lowest one. Karts and other big groups should stay on.
+function BackpackScript.SetGroupEnabled(group: string, enabled: boolean): ()
+	if (DisabledGroups[group] == nil) == enabled then
+		return
+	end
+	if enabled then
+		DisabledGroups[group] = nil
+		local members: { Tool } = {}
+		for _, container: Instance in { Character, Backpack } do
+			for _, child: Instance in container:GetChildren() do
+				if child:IsA("Tool") and GroupOf(child) == group and not table.find(members, child) then
+					table.insert(members, child)
+				end
+			end
+		end
+		GroupMembers[group] = members
+		if #members == 0 then
+			return
+		end
+		-- The tool that keeps its slot: the one in hand, else the one in the lowest slot
+		local keeper: Tool = members[1]
+		local keeperIndex = math.huge
+		for _, member in members do
+			local slot: any = SlotsByTool[member]
+			if member.Parent == Character then
+				keeper = member
+				break
+			elseif slot and slot.Index < keeperIndex then
+				keeper = member
+				keeperIndex = slot.Index
+			end
+		end
+		for _, member in members do
+			local slot: any = SlotsByTool[member]
+			if member ~= keeper and slot then
+				slot:Clear()
+				if slot.Index > NumberOfHotbarSlots then
+					slot:Delete()
+				end
+			end
+		end
+		-- Redrawn with the group's icon and key cap
+		local keeperSlot: any = SlotsByTool[keeper]
+		if keeperSlot then
+			keeperSlot:Clear()
+		else
+			keeperSlot = LowestEmptySlot or MakeSlot(UIGridFrame)
+		end
+		keeperSlot:Fill(keeper)
+		CompactHotbar()
+	else
+		DisabledGroups[group] = true
+		local members = GroupMembers[group] or {}
+		GroupMembers[group] = nil
+		for _, member in members do
+			local slot: any = SlotsByTool[member]
+			if slot then
+				-- Redrawn as a plain slot
+				slot:Clear()
+			else
+				slot = LowestEmptySlot or MakeSlot(UIGridFrame)
+			end
+			slot:Fill(member)
+		end
+	end
+	if InventoryFrame.Visible then
+		AdjustInventoryFrames()
+	else
+		AdjustHotbarFrames()
+	end
+	UpdateScrollingFrameCanvasSize()
+end
+
+-- Whether `group` is on (`SetGroupEnabled`); groups are on unless switched off
+function BackpackScript.IsGroupEnabled(group: string): boolean
+	return DisabledGroups[group] == nil
+end
+
+-- The slot frame that equips `tool`: its own slot, or its group's slot. With `bringForward`, a group
+-- slot showing another member that isn't in hand switches to `tool` first, so its key equips `tool`
+-- (GRG's new-player cue points at the axe's slot). Nil when the tool has no slot.
+function BackpackScript.SlotFrameFor(tool: Tool, bringForward: boolean?): GuiObject?
+	local slot: any = SlotsByTool[tool]
+	if slot == nil then
+		local group = GroupOf(tool)
+		slot = group and GroupSlot(group)
+		if slot and bringForward and slot.Tool and slot.Tool.Parent ~= Character then
+			slot:Clear()
+			slot:Fill(tool)
+		end
+	end
+	return slot and slot.Frame
 end
 
 -- Sets whether the backpack is enabled or not
