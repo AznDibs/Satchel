@@ -219,8 +219,8 @@ local GROUP_BY_NAME: { [string]: string } = {
 	Help = "Signs",
 	Panic = "Signs",
 }
--- Tools with these CollectionService tags join a group too: every kart (owner 2026-10-11), except
--- the job karts below, which keep their own slots, and the KartData template
+-- Tools with these CollectionService tags join a group too: every kart (owner 2026-10-11, the job
+-- karts Bus, BusKart and FarmKart too since 2026-10-29), except the KartData template below
 local GROUP_BY_TAG: { [string]: string } = {
 	KartTool = "Karts",
 	-- Work tools, every tier (owner 2026-10-29): GRG tags each tier with its tool kind
@@ -231,9 +231,6 @@ local GROUP_BY_TAG: { [string]: string } = {
 }
 local GROUP_TAG_EXCLUDED: { [string]: boolean } = {
 	TemplateKart = true,
-	Bus = true,
-	BusKart = true,
-	FarmKart = true,
 }
 -- Tag of kart tools: they have no TextureId, so their group icons are 3D kart previews (KartPreview)
 local KART_TOOL_TAG = "KartTool"
